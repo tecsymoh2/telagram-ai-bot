@@ -1,32 +1,30 @@
 # Telegram AI Bot
 
-Python Telegram webhook bot for Vercel. Uses Groq for AI responses and Neon PostgreSQL for persistent conversation memory.
+Webhook bot for Vercel: Groq (chat, vision, Whisper) + Neon Postgres memory.
 
 ## Features
-- Persistent user profiles, conversations, and message history
-- Commands: `/start`, `/help`, `/reset`, `/about`, `/status`, `/admin`
-- Optional Telegram webhook secret verification
-- Configurable model and system prompt
+- Persistent users, conversations and message history
+- `/start /help /reset /about /status /admin`
+- `/model` and `/persona` pickers (inline buttons, saved per user)
+- `/remember /memories /forget` – long-term notes injected into every prompt
+- `/summary`, `/export` (history as .txt), `/stats`
+- Voice messages (Whisper) and photo analysis (vision model)
+- Group chats: replies to @mentions, replies and commands
+- Per-minute and daily rate limits, duplicate-update protection
+- Admin: `/broadcast`, `/ban`, `/unban`, global stats
+- Webhook secret verification, long-reply splitting
 
-## Deploy to Vercel
-Import this repository into Vercel and add environment variables: `DATABASE_URL`, `TELEGRAM_BOT_TOKEN`, `TELEGRAM_WEBHOOK_SECRET`, `GROQ_API_KEY`. Optional: `GROQ_MODEL`, `ADMIN_IDS`, `SYSTEM_PROMPT`. Deploy. Webhook URL: `https://YOUR-VERCEL-DOMAIN/api`.
+## Deploy (3 steps)
+1. Import this repo into Vercel.
+2. Add env vars: `TELEGRAM_BOT_TOKEN`, `GROQ_API_KEY`, `DATABASE_URL` (Neon connection string). Optional: `ADMIN_IDS`.
+3. Deploy, then open `https://YOUR-DOMAIN.vercel.app/setup` once.
 
-Register webhook locally (replace placeholders; never commit credentials):
-```bash
-curl -X POST "https://api.telegram.org/bot<TELEGRAM_BOT_TOKEN>/setWebhook" \
-  -d "url=https://YOUR-VERCEL-DOMAIN/api" \
-  -d "secret_token=<TELEGRAM_WEBHOOK_SECRET>"
+`/setup` creates the database tables, registers the webhook (with an auto-generated secret) and installs the Telegram command menu. No SQL or curl needed.
+
+## Local
 ```
-
-## Neon
-Database name: `telegram_ai_bot`. Run `schema.sql` if tables need recreating. Use the Neon connection string as `DATABASE_URL`; keep it private.
-
-## Local development
-```bash
-python -m venv .venv
-source .venv/bin/activate
+python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn api.index:app --reload
 ```
-
-Check Groq model availability and limits before production. Add rate limits and usage controls before broad public release.
+Groq model names change; verify `GROQ_MODEL`, `ALLOWED_MODELS` and `GROQ_VISION_MODEL` in your Groq console.
