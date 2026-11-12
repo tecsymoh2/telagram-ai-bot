@@ -21,8 +21,8 @@ def _post(path, **kwargs):
     return r.json()
 
 
-def build_system(user, notes):
-    parts = [config.SYSTEM_PROMPT]
+def build_system(user, notes, base=None):
+    parts = [base or config.SYSTEM_PROMPT]
     persona = config.PERSONAS.get(user["persona"], "")
     if persona:
         parts.append(persona)
@@ -33,26 +33,26 @@ def build_system(user, notes):
     return "\n\n".join(parts)
 
 
-def chat(model, system, messages, max_tokens=1024):
+def chat(model, system, messages, max_tokens=1024, temperature=0.7):
     data = _post(
         "/chat/completions",
         json={
             "model": model,
             "messages": [{"role": "system", "content": system}, *messages],
             "max_tokens": max_tokens,
-            "temperature": 0.7,
+            "temperature": temperature,
         },
     )
     return data["choices"][0]["message"]["content"].strip()
 
 
-def vision(system, history, prompt, image_bytes):
+def vision(system, history, prompt, image_bytes, temperature=0.7):
     b64 = base64.b64encode(image_bytes).decode()
     content = [
         {"type": "text", "text": prompt or "Describe this image."},
         {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
     ]
-    return chat(config.VISION_MODEL, system, [*history, {"role": "user", "content": content}])
+    return chat(config.VISION_MODEL, system, [*history, {"role": "user", "content": content}], temperature=temperature)
 
 
 def transcribe(audio_bytes, filename="voice.ogg"):

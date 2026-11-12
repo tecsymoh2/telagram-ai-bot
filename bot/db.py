@@ -93,7 +93,7 @@ def today_count(c, user_id):
 
 
 def set_user_field(c, user_id, field, value):
-    assert field in {"model", "persona", "is_banned"}
+    assert field in {"model", "persona", "is_banned", "daily_limit", "temperature"}
     c.execute(f"UPDATE users SET {field}=%s WHERE id=%s", (value, user_id))
 
 
@@ -131,3 +131,64 @@ def global_stats(c):
 
 def all_user_ids(c):
     return [r["id"] for r in c.execute("SELECT id FROM users WHERE NOT is_banned").fetchall()]
+
+
+def get_setting(c, key, default=None):
+    r = c.execute("SELECT value FROM settings WHERE key=%s", (key,)).fetchone()
+    return r["value"] if r else default
+
+
+def set_setting(c, key, value):
+    if value is None:
+        c.execute("DELETE FROM settings WHERE key=%s", (key,))
+    else:
+        c.execute(
+            "INSERT INTO settings(key,value) VALUES (%s,%s) ON CONFLICT (key) DO UPDATE SET value=EXCLUDED.value",
+            (key, value),
+        )
+
+
+def find_user(c, ident):
+    ident = ident.strip().lstrip("@")
+    if ident.isdigit():
+        return c.execute("SELECT * FROM users WHERE id=%s", (int(ident),)).fetchone()
+    return c.execute("SELECT * FROM users WHERE lower(username)=lower(%s)", (ident,)).fetchone()
+
+
+def list_users(c, limit=10, offset=0):
+    return c.execute("SELECT * FROM users ORDER BY last_seen DESC LIMIT %s OFFSET %s", (limit, offset)).fetchall()
+
+
+def top_users(c, limit=10):
+    return c.execute(
+        """SELECT u.id, u.username, u.first_name, count(m.id) AS n
+           FROM users u JOIN messages m ON m.user_id=u.id AND m.role='user'
+           GROUP BY u.id ORDER BY n DESC LIMIT %s""",
+        (limit,),
+    ).fetchall()
+
+
+def pop_last_exchange(c, conv_id):
+    """Remove the last user+assistant pair and return the user's text (for /regenerate)."""
+    rows = c.execute(
+        "SELECT id, role, content FROM messages WHERE conversation_id=%s ORDER BY id DESC LIMIT 2", (conv_id,)
+    ).fetchall()
+    if len(rows) < 2 or rows[0]["role"] != "assistant" or rows[1]["role"] != "user":
+        return None
+    c.execute("DELETE FROM messages WHERE id = ANY(%s)", ([rows[0]["id"], rows[1]["id"]],))
+    return rows[1]["content"]
+
+
+def recent_messages(c, conv_id, limit=10):
+    rows = c.execute(
+        "SELECT role, content FROM messages WHERE conversation_id=%s ORDER BY id DESC LIMIT %s", (conv_id, limit)
+    ).fetchall()
+    return list(reversed(rows))
+
+
+def add_feedback(c, user_id, text):
+    c.execute("INSERT INTO feedback (user_id, content) VALUES (%s,%s)", (user_id, text))
+
+
+def admin_ids_from_db(c):
+    return [r["id"] for r in c.execute("SELECT id FROM users").fetchall()]
