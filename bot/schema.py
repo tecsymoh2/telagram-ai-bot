@@ -56,4 +56,43 @@ CREATE TABLE IF NOT EXISTS feedback (
   content    TEXT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS premium_until TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS pending_action TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS tz_offset SMALLINT NOT NULL DEFAULT 3;
+
+CREATE TABLE IF NOT EXISTS usage (
+  id         BIGSERIAL PRIMARY KEY,
+  user_id    BIGINT NOT NULL,
+  kind       TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_usage_user_time ON usage(user_id, created_at);
+
+CREATE TABLE IF NOT EXISTS payments (
+  id         TEXT PRIMARY KEY,
+  seq        BIGSERIAL,
+  user_id    BIGINT NOT NULL,
+  plan       TEXT NOT NULL,
+  amount     INT NOT NULL,
+  days       INT NOT NULL,
+  phone      TEXT,
+  status     TEXT NOT NULL DEFAULT 'PENDING',
+  applied    BOOLEAN NOT NULL DEFAULT FALSE,
+  message    TEXT,
+  receipt    TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_pay_user ON payments(user_id);
+
+CREATE TABLE IF NOT EXISTS reminders (
+  id         BIGSERIAL PRIMARY KEY,
+  user_id    BIGINT NOT NULL,
+  chat_id    BIGINT NOT NULL,
+  text       TEXT NOT NULL,
+  due_at     TIMESTAMPTZ NOT NULL,
+  sent       BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_rem_due ON reminders(sent, due_at);
 """

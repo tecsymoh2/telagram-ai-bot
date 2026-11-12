@@ -62,3 +62,12 @@ def transcribe(audio_bytes, filename="voice.ogg"):
         files={"file": (filename, audio_bytes)},
     )
     return data.get("text", "").strip()
+
+
+def generate_image(prompt):
+    import urllib.parse
+    url = config.IMAGE_API_URL.format(prompt=urllib.parse.quote(prompt[:500]))
+    r = httpx.get(url, timeout=55, follow_redirects=True)
+    if r.status_code != 200 or not r.headers.get("content-type", "").startswith("image"):
+        raise AIError("The image service is busy right now. Please try again in a moment.")
+    return r.content

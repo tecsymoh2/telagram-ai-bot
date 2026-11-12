@@ -64,3 +64,26 @@ def download(file_id):
     if not info:
         return None
     return _client.get(f"{FILE_API}/{info['file_path']}").content
+
+
+def send_photo(chat_id, data: bytes, caption=""):
+    _client.post(
+        f"{API}/sendPhoto",
+        data={"chat_id": chat_id, "caption": caption[:1000]},
+        files={"photo": ("image.jpg", data, "image/jpeg")},
+        timeout=60,
+    )
+
+
+def action(chat_id, act="typing"):
+    try:
+        call("sendChatAction", chat_id=chat_id, action=act)
+    except Exception:
+        pass
+
+
+def delete_message(chat_id, message_id):
+    try:
+        call("deleteMessage", chat_id=chat_id, message_id=message_id)
+    except Exception:
+        pass

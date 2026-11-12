@@ -78,22 +78,37 @@ def history(c, conv_id, limit):
 
 def recent_user_messages(c, user_id, seconds=60):
     return c.execute(
-        "SELECT count(*) AS n FROM messages WHERE user_id=%s AND role='user' "
-        "AND created_at > now() - make_interval(secs => %s)",
-        (user_id, seconds),
+        """SELECT (SELECT count(*) FROM messages WHERE user_id=%(u)s AND role='user'
+                     AND created_at > now() - make_interval(secs => %(s)s))
+                + (SELECT count(*) FROM usage WHERE user_id=%(u)s
+                     AND created_at > now() - make_interval(secs => %(s)s)) AS n""",
+        {"u": user_id, "s": seconds},
     ).fetchone()["n"]
 
 
 def today_count(c, user_id):
     return c.execute(
-        "SELECT count(*) AS n FROM messages WHERE user_id=%s AND role='user' "
-        "AND created_at >= date_trunc('day', now())",
-        (user_id,),
+        """SELECT (SELECT count(*) FROM messages WHERE user_id=%(u)s AND role='user'
+                     AND created_at >= date_trunc('day', now()))
+                + (SELECT count(*) FROM usage WHERE user_id=%(u)s
+                     AND created_at >= date_trunc('day', now())) AS n""",
+        {"u": user_id},
+    ).fetchone()["n"]
+
+
+def log_usage(c, user_id, kind):
+    c.execute("INSERT INTO usage (user_id, kind) VALUES (%s,%s)", (user_id, kind))
+
+
+def usage_today(c, user_id, kind):
+    return c.execute(
+        "SELECT count(*) AS n FROM usage WHERE user_id=%s AND kind=%s AND created_at >= date_trunc('day', now())",
+        (user_id, kind),
     ).fetchone()["n"]
 
 
 def set_user_field(c, user_id, field, value):
-    assert field in {"model", "persona", "is_banned", "daily_limit", "temperature"}
+    assert field in {"model", "persona", "is_banned", "daily_limit", "temperature", "pending_action", "tz_offset"}
     c.execute(f"UPDATE users SET {field}=%s WHERE id=%s", (value, user_id))
 
 
@@ -192,3 +207,95 @@ def add_feedback(c, user_id, text):
 
 def admin_ids_from_db(c):
     return [r["id"] for r in c.execute("SELECT id FROM users").fetchall()]
+
+
+# ---------- plans / payments / premium ----------
+def get_plans(c):
+    import json
+    from .config import DEFAULT_PLANS
+    raw = get_setting(c, "plans")
+    try:
+        return json.loads(raw) if raw else dict(DEFAULT_PLANS)
+    except Exception:
+        return dict(DEFAULT_PLANS)
+
+
+def save_plans(c, plans):
+    import json
+    set_setting(c, "plans", json.dumps(plans))
+
+
+def add_payment(c, pid, user_id, plan, amount, days, phone):
+    return c.execute(
+        """INSERT INTO payments (id, user_id, plan, amount, days, phone) VALUES (%s,%s,%s,%s,%s,%s)
+           ON CONFLICT (id) DO NOTHING RETURNING *""",
+        (pid, user_id, plan, amount, days, phone),
+    ).fetchone()
+
+
+def get_payment(c, pid):
+    return c.execute("SELECT * FROM payments WHERE id=%s", (pid,)).fetchone()
+
+
+def get_payment_by_seq(c, seq):
+    return c.execute("SELECT * FROM payments WHERE seq=%s", (seq,)).fetchone()
+
+
+def recent_payments(c, limit=15):
+    return c.execute("SELECT * FROM payments ORDER BY created_at DESC LIMIT %s", (limit,)).fetchall()
+
+
+def revenue(c):
+    return c.execute(
+        """SELECT coalesce(sum(amount) FILTER (WHERE applied),0) AS total,
+                  coalesce(sum(amount) FILTER (WHERE applied AND created_at > now() - interval '30 days'),0) AS last30,
+                  count(*) FILTER (WHERE applied) AS paid
+           FROM payments"""
+    ).fetchone()
+
+
+def premium_count(c):
+    return c.execute("SELECT count(*) AS n FROM users WHERE premium_until > now()").fetchone()["n"]
+
+
+def grant_premium(c, user_id, days):
+    return c.execute(
+        """UPDATE users SET premium_until = GREATEST(coalesce(premium_until, now()), now()) + make_interval(days => %s)
+           WHERE id=%s RETURNING premium_until""",
+        (days, user_id),
+    ).fetchone()
+
+
+def revoke_premium(c, user_id):
+    c.execute("UPDATE users SET premium_until=NULL WHERE id=%s", (user_id,))
+
+
+# ---------- reminders ----------
+def add_reminder(c, user_id, chat_id, text, due_at):
+    return c.execute(
+        "INSERT INTO reminders (user_id, chat_id, text, due_at) VALUES (%s,%s,%s,%s) RETURNING id",
+        (user_id, chat_id, text, due_at),
+    ).fetchone()["id"]
+
+
+def list_reminders(c, user_id):
+    return c.execute(
+        "SELECT id, text, due_at FROM reminders WHERE user_id=%s AND NOT sent ORDER BY due_at LIMIT 20", (user_id,)
+    ).fetchall()
+
+
+def cancel_reminder(c, user_id, rid):
+    return c.execute("DELETE FROM reminders WHERE user_id=%s AND id=%s AND NOT sent", (user_id, rid)).rowcount
+
+
+def due_reminders(c, limit=50):
+    return c.execute(
+        """UPDATE reminders SET sent=TRUE WHERE id IN (
+             SELECT id FROM reminders WHERE NOT sent AND due_at <= now() ORDER BY due_at LIMIT %s FOR UPDATE SKIP LOCKED)
+           RETURNING *""",
+        (limit,),
+    ).fetchall()
+
+
+def count_pending_reminders(c):
+    return c.execute("SELECT count(*) AS n FROM reminders WHERE NOT sent").fetchone()["n"]

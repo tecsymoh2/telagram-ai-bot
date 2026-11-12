@@ -45,3 +45,15 @@ PERSONAS = {
     "concise": "Answer in as few words as possible. No filler.",
     "coach": "Act as a supportive productivity and life coach. Ask one focused question at a time.",
 }
+
+SEARCH_MODEL = os.getenv("GROQ_SEARCH_MODEL", "groq/compound-mini")
+IMAGE_API_URL = os.getenv(
+    "IMAGE_API_URL", "https://image.pollinations.ai/prompt/{prompt}?width=1024&height=1024&nologo=true"
+)
+PREMIUM_DAILY_LIMIT = _int("PREMIUM_DAILY_LIMIT", 500)
+FREE_IMAGE_LIMIT = _int("FREE_IMAGE_LIMIT", 2)
+PREMIUM_IMAGE_LIMIT = _int("PREMIUM_IMAGE_LIMIT", 30)
+FREE_SEARCH_LIMIT = _int("FREE_SEARCH_LIMIT", 5)
+PREMIUM_SEARCH_LIMIT = _int("PREMIUM_SEARCH_LIMIT", 50)
+
+DEFAULT_PLANS = {"weekly": {"price": 50, "days": 7}, "monthly": {"price": 150, "days": 30}}
