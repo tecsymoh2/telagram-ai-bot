@@ -17,7 +17,7 @@ Webhook bot for Vercel: Groq (chat, vision, Whisper) + Neon Postgres memory.
 ## Deploy (3 steps)
 1. Import this repo into Vercel.
 2. Add env vars: `TELEGRAM_BOT_TOKEN`, `GROQ_API_KEY`, `DATABASE_URL` (Neon connection string). Optional: `ADMIN_IDS`.
-3. Deploy, then open `https://YOUR-DOMAIN.vercel.app/setup` once.
+3. Deploy, then open `https://YOUR-DOMAIN.vercel.app/api?action=setup` once.
 
 `/setup` creates the database tables, registers the webhook (with an auto-generated secret) and installs the Telegram command menu. No SQL or curl needed.
 
