@@ -13,11 +13,13 @@ app = FastAPI()
 
 COMMANDS = [
     ("start", "Welcome"), ("help", "Show commands"), ("reset", "New conversation"),
-    ("model", "Choose AI model"), ("persona", "Choose personality"),
-    ("remember", "Save a fact about you"), ("memories", "List saved facts"),
-    ("forget", "Delete saved facts"), ("summary", "Summarize this chat"),
-    ("export", "Download chat history"), ("stats", "Your usage"),
-    ("status", "Bot health"), ("about", "About this bot"),
+    ("regenerate", "Redo last answer"), ("history", "Last 10 messages"),
+    ("translate", "Translate text"), ("explain", "Explain simply"), ("improve", "Polish writing"),
+    ("tldr", "Short summary"), ("model", "Choose AI model"), ("persona", "Choose personality"),
+    ("creativity", "Set creativity 0-1"), ("remember", "Save a fact about you"),
+    ("memories", "List saved facts"), ("forget", "Delete saved facts"),
+    ("summary", "Summarize this chat"), ("export", "Download chat history"),
+    ("stats", "Your usage"), ("feedback", "Send feedback"), ("status", "Bot health"), ("about", "About"),
 ]
 
 
