@@ -22,6 +22,12 @@ Webhook bot for Vercel: Groq (chat, vision, Whisper) + Neon Postgres memory.
 
 `/setup` creates the database tables, registers the webhook (with an auto-generated secret) and installs the Telegram command menu. No SQL or curl needed.
 
+## Premium, dashboard, reminders
+- **Premium** is paid by M-Pesa STK Push through the Techland API (https://techland-stk.vercel.app/docs). Set the key in Telegram with `/setkey <key>` (stored in the DB, replace anytime). Plans: `/setplan weekly 50 7`.
+- In Techland, set the webhook URL to `https://YOUR-DOMAIN/api?action=techland` and save the secret with `/setwebhooksecret`. Users can also tap "I've paid" to check.
+- **Dashboard**: send `/dashboard` to the bot for a one-hour admin link.
+- **Reminders** need a scheduler: `/cronurl` gives a URL to call every minute (free on cron-job.org).
+
 ## Local
 ```
 python -m venv .venv && source .venv/bin/activate
