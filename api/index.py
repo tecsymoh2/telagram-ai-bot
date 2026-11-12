@@ -21,9 +21,8 @@ COMMANDS = [
 ]
 
 
-@app.get("/setup")
-def setup(request: Request):
-    """Open https://YOUR-DOMAIN/setup once after deploying: creates tables, sets webhook + command menu."""
+def run_setup(request: Request):
+    """Creates tables, sets webhook + command menu. Open https://YOUR-DOMAIN/api?action=setup once."""
     missing = [k for k, v in {
         "TELEGRAM_BOT_TOKEN": config.BOT_TOKEN, "GROQ_API_KEY": config.GROQ_API_KEY,
         "DATABASE_URL": config.DATABASE_URL}.items() if not v]
@@ -48,8 +47,10 @@ def setup(request: Request):
 
 
 @app.get("/{path:path}")
-def health(path: str = ""):
-    return {"ok": True, "service": "telegram-ai-bot", "next": "Open /setup once to finish installation"}
+def get_any(request: Request, path: str = ""):
+    if request.query_params.get("action") == "setup" or path.rstrip("/").endswith("setup"):
+        return run_setup(request)
+    return {"ok": True, "service": "telegram-ai-bot", "next": "Open /api?action=setup once to finish installation"}
 
 
 @app.post("/{path:path}")
