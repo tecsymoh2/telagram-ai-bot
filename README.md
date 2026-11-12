@@ -11,7 +11,8 @@ Webhook bot for Vercel: Groq (chat, vision, Whisper) + Neon Postgres memory.
 - Voice messages (Whisper) and photo analysis (vision model)
 - Group chats: replies to @mentions, replies and commands
 - Per-minute and daily rate limits, duplicate-update protection
-- Admin: `/broadcast`, `/ban`, `/unban`, global stats
+- Tools: `/translate /explain /improve /tldr /regenerate /history /creativity /feedback`
+- Admin (from Telegram, unlimited for admins): `/users /user /top /limit /unlimited /ban /unban /reply /broadcast /maintenance /setprompt`
 - Webhook secret verification, long-reply splitting
 
 ## Deploy (3 steps)
