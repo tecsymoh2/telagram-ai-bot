@@ -9,7 +9,32 @@ def _e(x):
     return html.escape(str(x if x is not None else "—"))
 
 
+def bars(values, labels, unit=""):
+    """Tiny responsive SVG bar chart that follows the page's light/dark colors."""
+    n = len(values)
+    top = max(values) if values and max(values) > 0 else 1
+    w, h, pad = 560, 150, 22
+    bw = (w - 2 * 8) / max(n, 1)
+    out = [f'<svg viewBox="0 0 {w} {h + pad}" width="100%" role="img">']
+    for i, v in enumerate(values):
+        bh = (v / top) * (h - 24)
+        x = 8 + i * bw
+        out.append(f'<rect x="{x + 2:.1f}" y="{h - bh:.1f}" width="{bw - 4:.1f}" height="{bh:.1f}" rx="3" fill="var(--ac)" opacity=".85"/>')
+        if v:
+            out.append(f'<text x="{x + bw / 2:.1f}" y="{h - bh - 3:.1f}" font-size="9" text-anchor="middle" fill="var(--mu)">{v}</text>')
+        if i % 2 == 0 or n <= 7:
+            out.append(f'<text x="{x + bw / 2:.1f}" y="{h + 14}" font-size="9" text-anchor="middle" fill="var(--mu)">{_e(labels[i])}</text>')
+    out.append("</svg>")
+    return "".join(out)
+
+
 def render(c, uid, exp, sig, notice=""):
+    rating = db.rating_stats(c)
+    series = db.daily_series(c, 14)
+    labels = [f"{r['day']:%d/%m}" for r in series]
+    chart_msgs = bars([int(r["msgs"]) for r in series], labels)
+    chart_users = bars([int(r["new_users"]) for r in series], labels)
+    chart_rev = bars([int(r["rev"]) for r in series], labels)
     s = db.global_stats(c)
     rev = db.revenue(c)
     users = db.list_users(c, 60, 0)
@@ -64,10 +89,13 @@ input{{background:var(--bg);color:var(--tx);border:1px solid var(--bd);border-ra
 <div class="card"><b>{db.premium_count(c)}</b><span>Premium users</span></div>
 <div class="card"><b>KES {rev['total']}</b><span>Revenue (30d: {rev['last30']})</span></div>
 </div>
+<h2>Messages per day</h2><div class="card">{chart_msgs}</div>
+<h2>New users per day</h2><div class="card">{chart_users}</div>
+<h2>Revenue per day (KES)</h2><div class="card">{chart_rev}</div>
 <h2>Status</h2>
 <div class="card">Maintenance: <b style="display:inline">{'ON' if maint else 'off'}</b>
 {form('maint_off' if maint else 'maint_on', label='Turn off' if maint else 'Turn on', cls='warn' if not maint else '')}
-<br><small>Payments API key: {'set ✅' if techland.configured(c) else 'not set ❌ (use /setkey in Telegram)'} · Plans: {plan_txt} · Pending reminders: {db.count_pending_reminders(c)}</small></div>
+<br><small>Payments API key: {'set ✅' if techland.configured(c) else 'not set ❌ (use /setkey in Telegram)'} · Plans: {plan_txt} · Pending reminders: {db.count_pending_reminders(c)} · Answer ratings: 👍 {rating['up']} / 👎 {rating['down']}</small></div>
 <h2>Recent payments</h2>
 <div class="wrap"><table><tr><th>When</th><th>User</th><th>Plan</th><th>KES</th><th>Status</th></tr>{prow}</table></div>
 <h2>Users (latest activity)</h2>

@@ -36,7 +36,7 @@ def upsert_user(c, u):
         """INSERT INTO users (id, username, first_name) VALUES (%s,%s,%s)
            ON CONFLICT (id) DO UPDATE SET username=EXCLUDED.username,
              first_name=EXCLUDED.first_name, last_seen=now()
-           RETURNING *""",
+           RETURNING *, (xmax = 0) AS is_new""",
         (u["id"], u.get("username"), u.get("first_name")),
     ).fetchone()
 
@@ -60,10 +60,10 @@ def reset_conversation(c, user_id):
 
 
 def add_message(c, conv_id, user_id, role, content):
-    c.execute(
-        "INSERT INTO messages (conversation_id, user_id, role, content) VALUES (%s,%s,%s,%s)",
+    return c.execute(
+        "INSERT INTO messages (conversation_id, user_id, role, content) VALUES (%s,%s,%s,%s) RETURNING id",
         (conv_id, user_id, role, content),
-    )
+    ).fetchone()["id"]
 
 
 def history(c, conv_id, limit):
@@ -108,7 +108,7 @@ def usage_today(c, user_id, kind):
 
 
 def set_user_field(c, user_id, field, value):
-    assert field in {"model", "persona", "is_banned", "daily_limit", "temperature", "pending_action", "tz_offset"}
+    assert field in {"model", "persona", "is_banned", "daily_limit", "temperature", "pending_action", "tz_offset", "language", "referred_by"}
     c.execute(f"UPDATE users SET {field}=%s WHERE id=%s", (value, user_id))
 
 
@@ -299,3 +299,186 @@ def due_reminders(c, limit=50):
 
 def count_pending_reminders(c):
     return c.execute("SELECT count(*) AS n FROM reminders WHERE NOT sent").fetchone()["n"]
+
+
+# ---------- groups ----------
+def get_chat(c, chat_id, title=None):
+    return c.execute(
+        """INSERT INTO chats (chat_id, title) VALUES (%s,%s)
+           ON CONFLICT (chat_id) DO UPDATE SET title=coalesce(EXCLUDED.title, chats.title) RETURNING *""",
+        (chat_id, title),
+    ).fetchone()
+
+
+def set_chat_field(c, chat_id, field, value):
+    assert field in {"mode", "persona", "welcome"}
+    c.execute(f"UPDATE chats SET {field}=%s WHERE chat_id=%s", (value, chat_id))
+
+
+# ---------- documents ----------
+def save_document(c, user_id, name, content):
+    c.execute(
+        """INSERT INTO documents (user_id, name, content) VALUES (%s,%s,%s)
+           ON CONFLICT (user_id) DO UPDATE SET name=EXCLUDED.name, content=EXCLUDED.content, created_at=now()""",
+        (user_id, name, content),
+    )
+
+
+def get_document(c, user_id):
+    return c.execute("SELECT name, content FROM documents WHERE user_id=%s", (user_id,)).fetchone()
+
+
+def clear_document(c, user_id):
+    return c.execute("DELETE FROM documents WHERE user_id=%s", (user_id,)).rowcount
+
+
+# ---------- todos ----------
+def add_todo(c, user_id, text):
+    return c.execute("INSERT INTO todos (user_id, text) VALUES (%s,%s) RETURNING id", (user_id, text)).fetchone()["id"]
+
+
+def list_todos(c, user_id):
+    return c.execute("SELECT id, text, done FROM todos WHERE user_id=%s ORDER BY done, id LIMIT 50", (user_id,)).fetchall()
+
+
+def count_todos(c, user_id):
+    return c.execute("SELECT count(*) AS n FROM todos WHERE user_id=%s", (user_id,)).fetchone()["n"]
+
+
+def finish_todo(c, user_id, tid):
+    return c.execute("UPDATE todos SET done=TRUE WHERE user_id=%s AND id=%s", (user_id, tid)).rowcount
+
+
+def clear_todos(c, user_id):
+    return c.execute("DELETE FROM todos WHERE user_id=%s AND done", (user_id,)).rowcount
+
+
+# ---------- promo codes ----------
+def create_code(c, code, days, max_uses):
+    c.execute(
+        """INSERT INTO promo_codes (code, days, max_uses) VALUES (%s,%s,%s)
+           ON CONFLICT (code) DO UPDATE SET days=EXCLUDED.days, max_uses=EXCLUDED.max_uses""",
+        (code, days, max_uses),
+    )
+
+
+def list_codes(c):
+    return c.execute("SELECT * FROM promo_codes ORDER BY created_at DESC LIMIT 30").fetchall()
+
+
+def delete_code(c, code):
+    return c.execute("DELETE FROM promo_codes WHERE code=%s", (code,)).rowcount
+
+
+def redeem_code(c, code, user_id):
+    """Returns (days, error)."""
+    row = c.execute("SELECT * FROM promo_codes WHERE code=%s", (code,)).fetchone()
+    if not row:
+        return None, "That code doesn't exist."
+    got = c.execute(
+        "INSERT INTO promo_redemptions (code, user_id) VALUES (%s,%s) ON CONFLICT DO NOTHING RETURNING code",
+        (code, user_id),
+    ).fetchone()
+    if not got:
+        return None, "You've already used that code."
+    ok = c.execute(
+        "UPDATE promo_codes SET used=used+1 WHERE code=%s AND used < max_uses RETURNING days", (code,)
+    ).fetchone()
+    if not ok:
+        c.execute("DELETE FROM promo_redemptions WHERE code=%s AND user_id=%s", (code, user_id))
+        return None, "That code has been fully used."
+    return ok["days"], None
+
+
+# ---------- referrals / daily ----------
+def referral_count(c, user_id):
+    return c.execute("SELECT count(*) AS n FROM users WHERE referred_by=%s", (user_id,)).fetchone()["n"]
+
+
+def update_daily(c, user_id, day, streak):
+    c.execute("UPDATE users SET last_daily=%s, streak=%s WHERE id=%s", (day, streak, user_id))
+
+
+# ---------- expiry notices ----------
+def expiring_users(c):
+    return c.execute(
+        """SELECT id, premium_until FROM users WHERE premium_until > now()
+             AND premium_until < now() + interval '2 days' AND expiry_notified IS DISTINCT FROM premium_until"""
+    ).fetchall()
+
+
+def expired_users(c):
+    return c.execute(
+        """SELECT id, premium_until FROM users WHERE premium_until <= now()
+             AND premium_until > now() - interval '3 days' AND expired_notified IS DISTINCT FROM premium_until"""
+    ).fetchall()
+
+
+def mark_notified(c, user_id, column, value):
+    assert column in {"expiry_notified", "expired_notified"}
+    c.execute(f"UPDATE users SET {column}=%s WHERE id=%s", (value, user_id))
+
+
+# ---------- analytics / export ----------
+def daily_series(c, days=14):
+    return c.execute(
+        """SELECT d::date AS day,
+             (SELECT count(*) FROM messages m WHERE m.role='user' AND m.created_at::date = d::date) AS msgs,
+             (SELECT count(*) FROM users u WHERE u.created_at::date = d::date) AS new_users,
+             (SELECT coalesce(sum(amount),0) FROM payments p WHERE p.applied AND p.created_at::date = d::date) AS rev
+           FROM generate_series(current_date - (%s::int - 1), current_date, interval '1 day') d ORDER BY d""",
+        (days,),
+    ).fetchall()
+
+
+def all_users(c):
+    return c.execute("SELECT id, username, first_name, created_at, last_seen, premium_until, is_banned FROM users ORDER BY created_at").fetchall()
+
+
+# ---------- ratings ----------
+def rate_message(c, message_id, user_id, rating):
+    own = c.execute("SELECT 1 AS x FROM messages WHERE id=%s AND user_id=%s", (message_id, user_id)).fetchone()
+    if not own:
+        return False
+    c.execute(
+        """INSERT INTO ratings (message_id, user_id, rating) VALUES (%s,%s,%s)
+           ON CONFLICT (message_id) DO UPDATE SET rating=EXCLUDED.rating""",
+        (message_id, user_id, rating),
+    )
+    return True
+
+
+def rating_stats(c):
+    return c.execute(
+        "SELECT count(*) FILTER (WHERE rating=1) AS up, count(*) FILTER (WHERE rating=0) AS down FROM ratings"
+    ).fetchone()
+
+
+# ---------- privacy ----------
+def delete_user_data(c, user_id):
+    """Removes chat content. Keeps the user row and payment records (needed for premium & accounting)."""
+    for table in ("ratings", "messages", "conversations", "notes", "documents", "todos", "reminders", "feedback", "usage"):
+        c.execute(f"DELETE FROM {table} WHERE user_id=%s", (user_id,))
+
+
+# ---------- segments / leaderboard ----------
+def user_ids_segment(c, seg):
+    where = {
+        "all": "NOT is_banned",
+        "premium": "NOT is_banned AND premium_until > now()",
+        "free": "NOT is_banned AND (premium_until IS NULL OR premium_until <= now())",
+        "inactive": "NOT is_banned AND last_seen < now() - interval '14 days'",
+    }[seg]
+    return [r["id"] for r in c.execute(f"SELECT id FROM users WHERE {where}").fetchall()]
+
+
+def top_streaks(c, limit=10):
+    return c.execute(
+        "SELECT first_name, username, streak FROM users WHERE streak > 0 AND last_daily >= current_date - 1 "
+        "ORDER BY streak DESC LIMIT %s", (limit,)).fetchall()
+
+
+def top_inviters(c, limit=10):
+    return c.execute(
+        """SELECT u.first_name, u.username, count(*) AS n FROM users r JOIN users u ON u.id = r.referred_by
+           GROUP BY u.id ORDER BY n DESC LIMIT %s""", (limit,)).fetchall()

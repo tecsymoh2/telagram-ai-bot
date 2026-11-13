@@ -30,6 +30,8 @@ def build_system(user, notes, base=None):
         parts.append("Things the user asked you to remember:\n" + "\n".join(f"- {n['content']}" for n in notes))
     if user.get("first_name"):
         parts.append(f"The user's name is {user['first_name']}.")
+    if user.get("language"):
+        parts.append(f"Always reply in {user['language']} unless the user asks otherwise.")
     return "\n\n".join(parts)
 
 

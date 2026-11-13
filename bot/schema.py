@@ -95,4 +95,58 @@ CREATE TABLE IF NOT EXISTS reminders (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS idx_rem_due ON reminders(sent, due_at);
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS referred_by BIGINT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS expiry_notified TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS expired_notified TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS language TEXT;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS last_daily DATE;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS streak INT NOT NULL DEFAULT 0;
+
+CREATE TABLE IF NOT EXISTS chats (
+  chat_id    BIGINT PRIMARY KEY,
+  title      TEXT,
+  mode       TEXT NOT NULL DEFAULT 'mention',
+  persona    TEXT,
+  welcome    TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS documents (
+  user_id    BIGINT PRIMARY KEY,
+  name       TEXT NOT NULL,
+  content    TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS todos (
+  id         BIGSERIAL PRIMARY KEY,
+  user_id    BIGINT NOT NULL,
+  text       TEXT NOT NULL,
+  done       BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_todos_user ON todos(user_id);
+
+CREATE TABLE IF NOT EXISTS promo_codes (
+  code       TEXT PRIMARY KEY,
+  days       INT NOT NULL,
+  max_uses   INT NOT NULL,
+  used       INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS promo_redemptions (
+  code       TEXT NOT NULL,
+  user_id    BIGINT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  PRIMARY KEY (code, user_id)
+);
+
+CREATE TABLE IF NOT EXISTS ratings (
+  message_id BIGINT PRIMARY KEY,
+  user_id    BIGINT NOT NULL,
+  rating     SMALLINT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
