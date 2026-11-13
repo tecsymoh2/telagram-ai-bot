@@ -28,6 +28,17 @@ Webhook bot for Vercel: Groq (chat, vision, Whisper) + Neon Postgres memory.
 - **Dashboard**: send `/dashboard` to the bot for a one-hour admin link.
 - **Reminders** need a scheduler: `/cronurl` gives a URL to call every minute (free on cron-job.org).
 
+## More features
+- **Referrals** `/invite`, **daily streak** `/daily` (7 days = +1 premium day), **promo codes** (`/newcode`, `/redeem`)
+- **Document chat**: send a PDF/DOCX/TXT file, then ask questions (`/doc`, `/cleardoc`)
+- **Groups**: `/groupmode`, `/grouppersona`, `/welcome`, `/groupinfo` (group admins). Mode "all" needs privacy mode off in @BotFather.
+- **To-do list**, `/quiz`, `/language`, **premium expiry notices** (sent by the cron job), admin `/exportusers` CSV, dashboard charts.
+
+## Even more
+- 👍 👎 🔄 buttons under answers (ratings shown on the dashboard), `/deleteme` privacy erase
+- `/read <link>`, `/weather`, `/convert`, `/qr`, `/password`, `/dice`, `/coin`, `/leaderboard`
+- Admin: `/lock image|search|doc on` (premium only), `/broadcastto premium|free|inactive|all`, `/setstart`
+
 ## Local
 ```
 python -m venv .venv && source .venv/bin/activate
