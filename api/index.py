@@ -16,13 +16,20 @@ app = FastAPI()
 
 COMMANDS = [
     ("start", "Welcome"), ("help", "Show commands"), ("premium", "Plans & upgrade"),
-    ("search", "Search the web"), ("imagine", "Generate an image"), ("remind", "Set a reminder"),
-    ("reminders", "Your reminders"), ("translate", "Translate text"), ("explain", "Explain simply"),
-    ("improve", "Polish writing"), ("tldr", "Short summary"), ("reset", "New conversation"),
-    ("regenerate", "Redo last answer"), ("history", "Last 10 messages"), ("model", "Choose AI model"),
-    ("persona", "Choose personality"), ("creativity", "Set creativity 0-1"), ("timezone", "Set your timezone"),
+    ("invite", "Invite friends, earn Premium"), ("daily", "Daily check-in streak"),
+    ("redeem", "Use a promo code"), ("search", "Search the web"), ("imagine", "Generate an image"),
+    ("quiz", "Make a quiz"), ("remind", "Set a reminder"), ("reminders", "Your reminders"),
+    ("todo", "To-do list"), ("doc", "Current document"), ("cleardoc", "Remove document"),
+    ("translate", "Translate text"), ("explain", "Explain simply"), ("improve", "Polish writing"),
+    ("tldr", "Short summary"), ("reset", "New conversation"), ("regenerate", "Redo last answer"),
+    ("history", "Last 10 messages"), ("model", "Choose AI model"), ("persona", "Choose personality"),
+    ("language", "Set reply language"), ("creativity", "Set creativity 0-1"), ("timezone", "Set your timezone"),
     ("remember", "Save a fact about you"), ("memories", "List saved facts"), ("forget", "Delete saved facts"),
     ("summary", "Summarize this chat"), ("export", "Download chat history"), ("stats", "Your usage"),
+    ("referrals", "Friends you invited"), ("groupinfo", "Group settings"),
+    ("read", "Summarize a web page"), ("weather", "Weather forecast"), ("convert", "Convert currency"),
+    ("qr", "Make a QR code"), ("password", "Generate a password"), ("dice", "Roll dice"), ("coin", "Flip a coin"),
+    ("leaderboard", "Top streaks & inviters"), ("deleteme", "Erase my data"),
     ("feedback", "Send feedback"), ("status", "Bot health"), ("about", "About"),
 ]
 
@@ -73,7 +80,11 @@ def get_any(request: Request, path: str = ""):
             return Response(status_code=403)
         with db.connect() as c:
             db.ensure_schema(c)
-            return {"ok": True, "sent": handlers.process_reminders(c)}
+            from datetime import datetime, timezone
+            out = {"ok": True, "reminders": handlers.process_reminders(c)}
+            if datetime.now(timezone.utc).minute % 10 == 0:  # expiry checks every 10 minutes are plenty
+                out["expiry_notices"] = handlers.process_expiries(c)
+            return out
 
     return {"ok": True, "service": "telegram-ai-bot", "next": "Open /api?action=setup once to finish installation"}
 
