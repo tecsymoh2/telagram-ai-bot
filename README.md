@@ -39,6 +39,22 @@ Webhook bot for Vercel: Groq (chat, vision, Whisper) + Neon Postgres memory.
 - `/read <link>`, `/weather`, `/convert`, `/qr`, `/password`, `/dice`, `/coin`, `/leaderboard`
 - Admin: `/lock image|search|doc on` (premium only), `/broadcastto premium|free|inactive|all`, `/setstart`
 
+## Reply in your personal chats (Telegram Business)
+1. @BotFather → your bot → Bot Settings → Business Mode → turn on.
+2. Re-open `/api?action=setup` once after deploying.
+3. In Telegram (needs Premium): Settings → Business → Chatbots → pick the bot, choose chats, allow "Reply to messages".
+4. In the bot: `/business`, `/bizmode draft|auto|off`, `/bizprompt <instructions>`, `/bizdisclose on|off`.
+Draft mode (default) shows you a suggested reply with Send/Skip buttons. When you type in a chat yourself, the bot pauses there for 30 minutes.
+
+## v4 additions
+- **Business mode extras:** working hours + away message (`/bizhours`, `/bizaway`), FAQ training (`/bizfaq` text or file), appointment booking with
+  conflict checks and reminders (`/bizbooking`, `/appointments`, `/cancelappt`), per-customer memory, team inbox for hard questions (`/bizteam` in a group),
+  experimental voice replies (`/bizvoice`, needs a Groq voice model; set `GROQ_TTS_MODEL` / `GROQ_TTS_VOICE` if the defaults change).
+- **Group moderation:** `/antilink`, `/badwords`, `/warnlimit` (bot must be a group admin).
+- **Image tools:** `/sticker`, `/enhance`, `/removebg` (needs a remove.bg key: `/setremovebg`).
+- **Staff roles:** `/addstaff <id> <manager|support>`; **backups:** `/backup`, `/setbackup`; **alerts:** errors and failed health checks are sent to owners.
+The cron job (`/cronurl`) now also sends appointment reminders, backups and health checks.
+
 ## Local
 ```
 python -m venv .venv && source .venv/bin/activate
