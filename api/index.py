@@ -9,7 +9,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from fastapi import FastAPI, Request, Response  # noqa: E402
 from fastapi.responses import HTMLResponse  # noqa: E402
 
-from bot import config, dashboard, db, handlers, security, techland  # noqa: E402
+from bot import alerts, config, dashboard, db, handlers, jobs, security, techland  # noqa: E402
 from bot import telegram as tg  # noqa: E402
 
 app = FastAPI()
@@ -29,7 +29,8 @@ COMMANDS = [
     ("referrals", "Friends you invited"), ("groupinfo", "Group settings"),
     ("read", "Summarize a web page"), ("weather", "Weather forecast"), ("convert", "Convert currency"),
     ("qr", "Make a QR code"), ("password", "Generate a password"), ("dice", "Roll dice"), ("coin", "Flip a coin"),
-    ("leaderboard", "Top streaks & inviters"), ("deleteme", "Erase my data"),
+    ("business", "Auto-reply in your chats"), ("sticker", "Photo → sticker"), ("enhance", "Enhance a photo"),
+    ("removebg", "Remove photo background"), ("voicereply", "Voice answers on/off"), ("leaderboard", "Top streaks & inviters"), ("deleteme", "Erase my data"),
     ("feedback", "Send feedback"), ("status", "Bot health"), ("about", "About"),
 ]
 
@@ -53,7 +54,7 @@ def run_setup(request: Request):
         return {"ok": False, "error": f"Database connection failed: {e}"}
     result["webhook"] = tg.call(
         "setWebhook", url=f"https://{host}/api", secret_token=config.WEBHOOK_SECRET,
-        allowed_updates=["message", "callback_query"], drop_pending_updates=True)
+        allowed_updates=["message", "callback_query", "business_connection", "business_message"], drop_pending_updates=True)
     tg.call("setMyCommands", commands=[{"command": c, "description": d} for c, d in COMMANDS])
     result["bot"] = tg.me().get("username")
     result["ok"] = bool(result["webhook"].get("ok"))
@@ -80,11 +81,7 @@ def get_any(request: Request, path: str = ""):
             return Response(status_code=403)
         with db.connect() as c:
             db.ensure_schema(c)
-            from datetime import datetime, timezone
-            out = {"ok": True, "reminders": handlers.process_reminders(c)}
-            if datetime.now(timezone.utc).minute % 10 == 0:  # expiry checks every 10 minutes are plenty
-                out["expiry_notices"] = handlers.process_expiries(c)
-            return out
+            return {"ok": True, **jobs.run_all(c)}
 
     return {"ok": True, "service": "telegram-ai-bot", "next": "Open /api?action=setup once to finish installation"}
 
@@ -135,4 +132,9 @@ async def post_any(request: Request, path: str = ""):
             handlers.handle_update(c, update)
     except Exception as e:  # never return 5xx, or Telegram retries endlessly
         print("update failed:", repr(e))
+        try:
+            with db.connect() as c:
+                alerts.alert(c, "update_failed", f"AI bot error: {type(e).__name__}: {str(e)[:300]}", 3, 900)
+        except Exception:
+            alerts.alert(None, "update_failed_db", f"AI bot error (database unreachable?): {type(e).__name__}: {str(e)[:200]}", 3, 900)
     return {"ok": True}
