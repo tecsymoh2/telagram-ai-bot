@@ -9,10 +9,23 @@ import random
 import secrets
 import string
 
-from . import ai, config, db, files, security, techland, utils, web
+from . import ai, alerts, colors, config, db, files, images, roles, security, styledata, techland, utils, web
 from . import telegram as tg
 
 START_TIME = time.time()
+
+BIZ_CMDS = {"/business", "/bizmode", "/bizprompt", "/bizdisclose", "/bizhours", "/bizaway", "/bizfaq", "/bizbooking",
+            "/bizvoice", "/appointments", "/cancelappt", "/bizteam"}
+
+ADMIN_LEVEL = {   # 1 support, 2 manager, 3 owner
+    "/admin": 1, "/users": 1, "/user": 1, "/top": 1, "/reply": 1,
+    "/limit": 2, "/unlimited": 2, "/ban": 2, "/unban": 2, "/broadcast": 2, "/broadcastto": 2, "/grant": 2, "/revoke": 2,
+    "/plans": 2, "/payments": 2, "/newcode": 2, "/codes": 2, "/delcode": 2, "/setrefdays": 2, "/lock": 2, "/maintenance": 2,
+    "/setstart": 2, "/setprompt": 2, "/dashboard": 2, "/exportusers": 2,
+    "/setplan": 3, "/delplan": 3, "/setpremiumlimit": 3, "/setkey": 3, "/setbase": 3, "/setwebhooksecret": 3, "/cronurl": 3,
+    "/backup": 3, "/setbackup": 3, "/addstaff": 3, "/delstaff": 3, "/staff": 3, "/setremovebg": 3,
+    "/colors": 2, "/setcolor": 2, "/resetcolors": 2,
+}
 
 HELP = """🤖 Commands
 
@@ -52,8 +65,11 @@ Send a PDF/DOCX/TXT file, then ask questions.
 👥 Groups (group admins)
 /groupmode mention|all|off · /grouppersona <name>
 /welcome <text|off> · /groupinfo
+/antilink on|off · /badwords add|del <word> · /warnlimit <n>
 
 ℹ️ /stats · /status · /feedback <text> · /about
+💼 /business – let me answer your personal chats (Telegram Premium): hours, FAQ, bookings, team inbox
+🎨 /sticker · /enhance · /removebg (send or reply to a photo) · /voicereply on|off
 🔒 /deleteme – erase your chat data
 
 Tip: tap 👍 👎 🔄 under answers to rate or redo them."""
@@ -78,7 +94,14 @@ ADMIN_HELP = """🛠 Admin (no limits for you)
 🎁 Growth
 /newcode <CODE> <days> <max uses> · /codes · /delcode <CODE>
 /setrefdays <referrer days> [invitee days]
-/cronurl – scheduler link (reminders + expiry notices)"""
+/cronurl – scheduler link (reminders, expiry notices, appointments, backups, alerts)
+
+🎨 /colors – change button colours (blue/green/red) · /setcolor <key> <colour> · /resetcolors
+
+👔 Roles & safety (owner)
+/addstaff <id> <manager|support> · /delstaff <id> · /staff
+/backup · /setbackup <days|off> · /setremovebg <key>
+Support: /users /user /top /reply · Managers: users, limits, bans, promos, broadcasts, plans view, payments"""
 
 TOOLS = {
     "/explain": "Explain the following clearly and simply, with an example if useful:\n\n{t}",
@@ -165,6 +188,13 @@ def feature_ok(c, user, chat_id, reply_to, kind):
 
 # ------------------------------------------------------------------ updates
 def handle_update(c, update):
+    colors.refresh(c)
+    if "business_connection" in update:
+        from . import business
+        return business.handle_connection(c, update["business_connection"])
+    if "business_message" in update:
+        from . import business
+        return business.handle_message(c, update["business_message"])
     if "callback_query" in update:
         return handle_callback(c, update["callback_query"])
     msg = update.get("message")
@@ -172,6 +202,12 @@ def handle_update(c, update):
         return welcome_members(c, msg)
     if not msg or "from" not in msg or msg["from"].get("is_bot"):
         return
+    rt0 = msg.get("reply_to_message")
+    if rt0 and msg.get("text") and not msg["text"].startswith("/"):      # team answering an escalated customer question
+        esc = db.get_escalation(c, msg["chat"]["id"], rt0["message_id"])
+        if esc:
+            from . import business
+            return business.handle_team_reply(c, esc, msg)
 
     chat = msg["chat"]
     chat_id = chat["id"]
@@ -184,6 +220,8 @@ def handle_update(c, update):
         uname = bot.get("username", "")
         chat_row = db.get_chat(c, chat_id, chat.get("title"))
         group_persona = chat_row["persona"]
+        if moderate(c, chat_row, msg, text):
+            return
         replied = (msg.get("reply_to_message") or {}).get("from", {}).get("id") == bot.get("id")
         mentioned = f"@{uname}".lower() in text.lower()
         is_cmd = text.startswith("/")
@@ -197,6 +235,15 @@ def handle_update(c, update):
     if user["is_banned"]:
         return
     admin = is_admin_id(user["id"])
+
+    if msg.get("document") and text.lower().startswith("/bizfaq") and chat["type"] == "private":
+        doc = msg["document"]
+        try:
+            faq = files.extract_text(doc.get("file_name") or "file.txt", tg.download(doc["file_id"])).strip()
+        except Exception:
+            return tg.send(chat_id, "I couldn't read that file. Send a PDF, DOCX or TXT.", msg["message_id"])
+        db.set_biz_setting(c, user["id"], "faq", faq[:6000])
+        return tg.send(chat_id, f"✅ FAQ saved from “{doc.get('file_name') or 'file'}” ({min(len(faq), 6000)} characters).", msg["message_id"])
 
     if text.startswith("/"):
         if user.get("pending_action"):
@@ -232,6 +279,44 @@ def handle_update(c, update):
     if not text and image is None:
         return tg.send(chat_id, "Send me text, a voice message, or a photo 🙂", msg["message_id"])
     respond(c, user, chat_id, msg["message_id"], text, image, prefix, group_persona)
+
+
+URL_RE = re.compile(r"(https?://|www\.|t\.me/|\b[a-z0-9-]+\.(?:com|net|org|io|ly|me|co|xyz|ru)\b)", re.I)
+
+
+def moderate(c, row, msg, text):
+    """Delete spam (links / banned words) from non-admins and warn; mute after too many warnings. True if handled."""
+    if msg.get("from", {}).get("is_bot") or not text or text.startswith("/"):
+        return False
+    bad = [w for w in (row.get("badwords") or "").split(",") if w]
+    hit = (row.get("antilink") and URL_RE.search(text)) or any(w in text.lower() for w in bad)
+    if not hit:
+        return False
+    uid, chat_id = msg["from"]["id"], msg["chat"]["id"]
+    if can_manage_chat(chat_id, uid):
+        return False
+    tg.delete_message(chat_id, msg["message_id"])
+    n = db.add_warn(c, chat_id, uid)
+    name = msg["from"].get("first_name") or "member"
+    if n >= row["warn_limit"]:
+        db.reset_warns(c, chat_id, uid)
+        tg.call("restrictChatMember", chat_id=chat_id, user_id=uid, permissions={"can_send_messages": False},
+                until_date=int(time.time()) + 3600)
+        tg.send(chat_id, f"🔇 {name} was muted for 1 hour (too many warnings).")
+    else:
+        tg.send(chat_id, f"⚠️ {name}, that message isn't allowed here. Warning {n}/{row['warn_limit']}.")
+    return True
+
+
+def photo_source(msg):
+    """The photo file this command refers to: attached to the command, or the message it replies to."""
+    for m in (msg, msg.get("reply_to_message") or {}):
+        if m.get("photo"):
+            return m["photo"][-1]["file_id"]
+        d = m.get("document")
+        if d and (d.get("mime_type") or "").startswith("image/"):
+            return d["file_id"]
+    return None
 
 
 def welcome_members(c, msg):
@@ -298,6 +383,11 @@ def respond(c, user, chat_id, reply_to, text, image=None, prefix="", persona=Non
     kb = [[{"text": "👍", "callback_data": f"fb:1:{answer_id}"}, {"text": "👎", "callback_data": f"fb:0:{answer_id}"},
            {"text": "🔄", "callback_data": "rg"}]] if chat_id > 0 else None
     tg.send(chat_id, prefix + answer, reply_to, keyboard=kb)
+    if user.get("voice_reply") and chat_id > 0 and len(answer) <= 600:       # experimental voice answer
+        try:
+            tg.send_audio(chat_id, ai.tts(answer))
+        except Exception:
+            pass
 
 
 def one_shot(c, user, chat_id, reply_to, prompt, kind="tool", model=None, system=None, gate=True):
@@ -465,7 +555,7 @@ def run_command(c, user, chat_id, msg, cmd, arg, admin):
             return reply(custom.replace("{name}", user.get("first_name") or "there"))
         return reply(f"👋 Hi {user.get('first_name') or 'there'}! I'm your AI assistant. Send a message, voice note, photo, or document.\n\nType /help to see what I can do.")
     if cmd == "/help":
-        return reply(HELP + (("\n\n" + ADMIN_HELP) if admin else ""))
+        return reply(HELP + (("\n\n" + ADMIN_HELP) if roles.level_of(c, uid) >= 1 else ""))
     if cmd == "/about":
         return reply("🤖 Telegram AI Bot\nGroq AI (chat, vision, voice, search) · Neon Postgres · Vercel.")
     if cmd == "/cancel":
@@ -692,7 +782,7 @@ def run_command(c, user, chat_id, msg, cmd, arg, admin):
         row = db.get_chat(c, chat_id, msg["chat"].get("title"))
         if cmd == "/groupinfo":
             return reply(f"👥 Group settings\nMode: {row['mode']}\nPersona: {row['persona'] or 'default'}\n"
-                         f"Welcome: {row['welcome'] or 'off'}\n\nMode 'all' needs privacy mode turned off in @BotFather.")
+                         f"Welcome: {row['welcome'] or 'off'}\nAnti-link: {'on' if row['antilink'] else 'off'} · Banned words: {len([w for w in (row['badwords'] or '').split(',') if w])} · Warn limit: {row['warn_limit']}\n\nMode 'all' needs privacy mode turned off in @BotFather.")
         if not can_manage_chat(chat_id, uid):
             return reply("⛔ Only group admins can change this.")
         if cmd == "/groupmode":
@@ -712,6 +802,41 @@ def run_command(c, user, chat_id, msg, cmd, arg, admin):
             return reply("Usage: /welcome Welcome {name}! (or /welcome off)")
         db.set_chat_field(c, chat_id, "welcome", None if arg.lower() == "off" else arg[:500])
         return reply("✅ Welcome message " + ("disabled." if arg.lower() == "off" else "saved."))
+
+    # ---- business auto-reply ----
+    if cmd in BIZ_CMDS:
+        from . import business
+        return business.run_command(c, user, reply, cmd, arg, chat_id, private)
+
+    # ---- image tools & voice ----
+    if cmd in ("/sticker", "/enhance", "/removebg"):
+        fid = photo_source(msg)
+        if not fid:
+            return reply("Send a photo with the command as the caption, or reply to a photo with it.")
+        if not check_limits(c, user, chat_id, mid):
+            return
+        tg.action(chat_id, "upload_photo")
+        try:
+            data = tg.download(fid)
+            if cmd == "/sticker":
+                tg.send_sticker(chat_id, images.to_sticker(data))
+            elif cmd == "/enhance":
+                tg.send_photo(chat_id, images.enhance(data), "✨ Enhanced")
+            else:
+                key = db.get_setting(c, "removebg_key") or config.REMOVEBG_API_KEY
+                if not key:
+                    return reply("Background removal needs a remove.bg key. The owner can add one with /setremovebg <key>.")
+                tg.send_document_bytes(chat_id, "no_background.png", images.remove_background(data, key),
+                                       "✂️ Background removed (PNG with transparency)", "image/png")
+        except Exception:
+            return reply("⚠️ I couldn't process that image.")
+        db.log_usage(c, uid, "tool")
+        return
+    if cmd == "/voicereply":
+        if arg not in ("on", "off"):
+            return reply(f"Usage: /voicereply on|off (experimental). Now: {'on' if user.get('voice_reply') else 'off'}")
+        db.set_user_field(c, uid, "voice_reply", arg == "on")
+        return reply(f"🔊 Voice replies {arg}.")
 
     # ---- utilities ----
     if cmd == "/read":
@@ -792,6 +917,34 @@ def run_command(c, user, chat_id, msg, cmd, arg, admin):
                      "Your Premium and payment records stay. Continue?",
                      keyboard=[[{"text": "Yes, erase my data", "callback_data": "del:yes"}, {"text": "Cancel", "callback_data": "del:no"}]])
 
+    # ---- group moderation ----
+    if cmd in ("/antilink", "/badwords", "/warnlimit"):
+        if private:
+            return reply("These commands work inside a group (make me an admin so I can delete messages).")
+        row = db.get_chat(c, chat_id, msg["chat"].get("title"))
+        if not can_manage_chat(chat_id, uid):
+            return reply("⛔ Only group admins can change this.")
+        if cmd == "/antilink":
+            if arg not in ("on", "off"):
+                return reply(f"Usage: /antilink on|off (deletes links from non-admins and warns). Now: {'on' if row['antilink'] else 'off'}")
+            db.set_chat_field(c, chat_id, "antilink", arg == "on")
+            return reply(f"🛡 Anti-link {arg}.")
+        if cmd == "/warnlimit":
+            if not arg.isdigit() or not 1 <= int(arg) <= 10:
+                return reply(f"Usage: /warnlimit <1-10> (warnings before a 1-hour mute). Now: {row['warn_limit']}")
+            db.set_chat_field(c, chat_id, "warn_limit", int(arg))
+            return reply(f"🛡 Members are muted for 1 hour after {arg} warnings.")
+        sub_cmd, _, word = arg.partition(" ")
+        words = [w for w in (row["badwords"] or "").split(",") if w]
+        word = word.strip().lower()[:30].replace(",", "")
+        if sub_cmd == "add" and word:
+            db.set_chat_field(c, chat_id, "badwords", ",".join(sorted(set(words + [word]))))
+            return reply("🛡 Added.")
+        if sub_cmd == "del" and word:
+            db.set_chat_field(c, chat_id, "badwords", ",".join(w for w in words if w != word))
+            return reply("🛡 Removed.")
+        return reply("Banned words: " + (", ".join(words) or "none") + "\nUsage: /badwords add <word> · /badwords del <word>")
+
     # ---- info ----
     if cmd == "/stats":
         s = db.user_stats(c, uid)
@@ -817,13 +970,10 @@ def run_command(c, user, chat_id, msg, cmd, arg, admin):
                 pass
         return reply("🙏 Thanks, your feedback was sent.")
 
-    ADMIN_CMDS = ("/admin", "/dashboard", "/users", "/user", "/top", "/limit", "/unlimited", "/ban", "/unban",
-                  "/reply", "/broadcast", "/maintenance", "/setprompt", "/grant", "/revoke", "/plans", "/setplan",
-                  "/delplan", "/payments", "/setpremiumlimit", "/setkey", "/setbase", "/setwebhooksecret", "/cronurl",
-                  "/setrefdays", "/newcode", "/codes", "/delcode", "/exportusers", "/lock", "/broadcastto", "/setstart")
-    if cmd in ADMIN_CMDS:
-        if not admin:
-            return reply("⛔ Admins only.")
+    need = ADMIN_LEVEL.get(cmd)
+    if need:
+        if roles.level_of(c, uid) < need:
+            return reply("⛔ " + {1: "Staff only.", 2: "Managers only.", 3: "Owner only."}[need])
         return run_admin(c, chat_id, msg, reply, cmd, arg)
     return reply("Unknown command. Try /help")
 
@@ -840,6 +990,50 @@ def target_user(c, reply, arg):
 def run_admin(c, chat_id, msg, reply, cmd, arg):
     uid = msg["from"]["id"]
 
+    if cmd == "/colors":
+        text, kb = colors.home_view(c)
+        return tg.send(chat_id, text, keyboard=kb)
+    if cmd == "/setcolor":
+        key, _, name = arg.partition(" ")
+        style = styledata.ALIASES.get(name.strip().lower())
+        if key not in styledata.DEFAULTS or not style:
+            return reply("Usage: /setcolor <key> <blue|green|red|default>\nKeys: " + ", ".join(styledata.DEFAULTS) + "\nTip: /colors lets you pick with buttons.")
+        colors.set_color(c, key, style)
+        return reply(f"🎨 {styledata.LABELS[key]} is now {styledata.STYLES[style]}.")
+    if cmd == "/resetcolors":
+        colors.reset(c)
+        return reply("🎨 All button colours are back to the defaults.")
+
+    if cmd == "/addstaff":
+        p = arg.split()
+        if len(p) != 2 or not p[0].isdigit() or p[1] not in ("manager", "support"):
+            return reply("Usage: /addstaff <telegram id> <manager|support>")
+        db.set_staff(c, int(p[0]), p[1])
+        return reply(f"✅ {p[0]} is now {p[1]}. They should open the bot once and send /start.")
+    if cmd == "/delstaff":
+        return reply("🗑 Removed." if arg.isdigit() and db.del_staff(c, int(arg)) else "Usage: /delstaff <id>")
+    if cmd == "/staff":
+        rows = db.list_staff(c)
+        return reply("👔 Staff\nOwners: " + ", ".join(map(str, sorted(config.ADMIN_IDS))) + "\n"
+                     + ("\n".join(f"{r['role']}: {r['user_id']}" for r in rows) if rows else "No other staff. /addstaff <id> <manager|support>"))
+    if cmd == "/backup":
+        from . import jobs
+        return tg.send_document_bytes(chat_id, "bot_backup.zip", jobs.backup_zip(c), "🗄 Backup (users, payments, appointments, feedback, promo codes)", "application/zip")
+    if cmd == "/setbackup":
+        if arg.lower() == "off":
+            db.set_setting(c, "backup_days", None)
+            return reply("🗄 Automatic backups off.")
+        if not arg.isdigit() or not 1 <= int(arg) <= 60:
+            return reply("Usage: /setbackup <every N days>|off")
+        db.set_setting(c, "backup_days", arg)
+        return reply(f"🗄 A backup will be sent to the owner(s) every {arg} day(s) around 02:00 East Africa time (needs the cron job).")
+    if cmd == "/setremovebg":
+        if len(arg) < 10:
+            return reply("Usage: /setremovebg <remove.bg API key>")
+        db.set_setting(c, "removebg_key", arg.strip())
+        tg.delete_message(chat_id, msg["message_id"])
+        return tg.send(chat_id, "✂️ Background-remover key saved (message deleted).")
+
     if cmd == "/admin":
         s = db.global_stats(c)
         rev = db.revenue(c)
@@ -847,6 +1041,7 @@ def run_admin(c, chat_id, msg, reply, cmd, arg):
             f"🛠 Admin panel\nUsers: {s['users']} (active 24h: {s['active_24h']}, banned: {s['banned']})\n"
             f"Messages: {s['messages']} (24h: {s['messages_24h']})\n"
             f"Premium users: {db.premium_count(c)} · Revenue: KES {rev['total']} (30d: {rev['last30']})\n"
+            f"Business connections: {db.count_business(c)}\n"
             f"Payments API key: {'✅ set' if techland.configured(c) else '❌ not set (/setkey)'}\n"
             f"Maintenance: {'ON 🔧' if db.get_setting(c, 'maintenance') == '1' else 'off'} · "
             f"Prompt: {'custom' if db.get_setting(c, 'system_prompt') else 'default'}\n\n" + ADMIN_HELP)
@@ -1091,6 +1286,32 @@ def handle_callback(c, cq):
     kind, _, value = data.partition(":")
     msg = cq.get("message")
     chat_id = msg["chat"]["id"] if msg else user["id"]
+    if kind in ("colh", "col", "colset", "colreset"):
+        if roles.level_of(c, user["id"]) < 2:
+            return tg.answer_callback(cq["id"], "Managers only", True)
+
+        def show(text, kb):
+            r = tg.call("editMessageText", chat_id=chat_id, message_id=msg["message_id"], text=text,
+                        reply_markup={"inline_keyboard": tg.style_keyboard(kb)}) if msg else {}
+            if not r.get("ok") and "not modified" not in str(r.get("description", "")):
+                tg.send(chat_id, text, keyboard=kb)
+        tg.answer_callback(cq["id"])
+        if kind == "colreset":
+            colors.reset(c)
+            return show(*colors.home_view(c))
+        if kind == "colh":
+            return show(*colors.home_view(c))
+        if kind == "col" and value in styledata.DEFAULTS:
+            return show(*colors.picker_view(c, value))
+        if kind == "colset":
+            key, _, style = value.partition(":")
+            if key in styledata.DEFAULTS and style in styledata.STYLES:
+                colors.set_color(c, key, style)
+                return show(*colors.picker_view(c, key))
+        return
+    from . import business
+    if business.handle_callback(c, cq, user):
+        return
 
     if kind == "model" and value in config.ALLOWED_MODELS:
         db.set_user_field(c, user["id"], "model", value)

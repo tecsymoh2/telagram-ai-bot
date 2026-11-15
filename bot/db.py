@@ -80,7 +80,7 @@ def recent_user_messages(c, user_id, seconds=60):
     return c.execute(
         """SELECT (SELECT count(*) FROM messages WHERE user_id=%(u)s AND role='user'
                      AND created_at > now() - make_interval(secs => %(s)s))
-                + (SELECT count(*) FROM usage WHERE user_id=%(u)s
+                + (SELECT count(*) FROM usage WHERE user_id=%(u)s AND kind <> 'biz'
                      AND created_at > now() - make_interval(secs => %(s)s)) AS n""",
         {"u": user_id, "s": seconds},
     ).fetchone()["n"]
@@ -90,7 +90,7 @@ def today_count(c, user_id):
     return c.execute(
         """SELECT (SELECT count(*) FROM messages WHERE user_id=%(u)s AND role='user'
                      AND created_at >= date_trunc('day', now()))
-                + (SELECT count(*) FROM usage WHERE user_id=%(u)s
+                + (SELECT count(*) FROM usage WHERE user_id=%(u)s AND kind <> 'biz'
                      AND created_at >= date_trunc('day', now())) AS n""",
         {"u": user_id},
     ).fetchone()["n"]
@@ -108,7 +108,7 @@ def usage_today(c, user_id, kind):
 
 
 def set_user_field(c, user_id, field, value):
-    assert field in {"model", "persona", "is_banned", "daily_limit", "temperature", "pending_action", "tz_offset", "language", "referred_by"}
+    assert field in {"model", "persona", "is_banned", "daily_limit", "temperature", "pending_action", "tz_offset", "language", "referred_by", "voice_reply"}
     c.execute(f"UPDATE users SET {field}=%s WHERE id=%s", (value, user_id))
 
 
@@ -311,7 +311,7 @@ def get_chat(c, chat_id, title=None):
 
 
 def set_chat_field(c, chat_id, field, value):
-    assert field in {"mode", "persona", "welcome"}
+    assert field in {"mode", "persona", "welcome", "antilink", "badwords", "warn_limit"}
     c.execute(f"UPDATE chats SET {field}=%s WHERE chat_id=%s", (value, chat_id))
 
 
@@ -459,6 +459,11 @@ def delete_user_data(c, user_id):
     """Removes chat content. Keeps the user row and payment records (needed for premium & accounting)."""
     for table in ("ratings", "messages", "conversations", "notes", "documents", "todos", "reminders", "feedback", "usage"):
         c.execute(f"DELETE FROM {table} WHERE user_id=%s", (user_id,))
+    ids = [r["id"] for r in c.execute("SELECT id FROM business_connections WHERE user_id=%s", (user_id,)).fetchall()]
+    if ids:
+        for table in ("business_messages", "business_chats"):
+            c.execute(f"DELETE FROM {table} WHERE connection_id = ANY(%s)", (ids,))
+        c.execute("DELETE FROM business_drafts WHERE owner_id=%s", (user_id,))
 
 
 # ---------- segments / leaderboard ----------
@@ -482,3 +487,204 @@ def top_inviters(c, limit=10):
     return c.execute(
         """SELECT u.first_name, u.username, count(*) AS n FROM users r JOIN users u ON u.id = r.referred_by
            GROUP BY u.id ORDER BY n DESC LIMIT %s""", (limit,)).fetchall()
+
+
+# ---------- business (Telegram Business chatbot mode) ----------
+def upsert_business_connection(c, cid, owner_id, user_chat_id, can_reply, is_enabled):
+    return c.execute(
+        """INSERT INTO business_connections (id, user_id, user_chat_id, can_reply, is_enabled)
+           VALUES (%s,%s,%s,%s,%s)
+           ON CONFLICT (id) DO UPDATE SET user_chat_id=EXCLUDED.user_chat_id,
+             can_reply=EXCLUDED.can_reply, is_enabled=EXCLUDED.is_enabled RETURNING *""",
+        (cid, owner_id, user_chat_id, can_reply, is_enabled),
+    ).fetchone()
+
+
+def get_business_connection(c, cid):
+    return c.execute("SELECT * FROM business_connections WHERE id=%s", (cid,)).fetchone()
+
+
+def user_connections(c, owner_id):
+    return c.execute("SELECT * FROM business_connections WHERE user_id=%s AND is_enabled", (owner_id,)).fetchall()
+
+
+def count_business(c):
+    return c.execute("SELECT count(*) AS n FROM business_connections WHERE is_enabled").fetchone()["n"]
+
+
+def get_biz_settings(c, owner_id):
+    c.execute("INSERT INTO business_settings (user_id) VALUES (%s) ON CONFLICT DO NOTHING", (owner_id,))
+    return c.execute("SELECT * FROM business_settings WHERE user_id=%s", (owner_id,)).fetchone()
+
+
+def set_biz_setting(c, owner_id, field, value):
+    assert field in {"mode", "instructions", "disclose", "hours_start", "hours_end", "away_message", "faq", "booking", "voice", "team_chat_id"}
+    get_biz_settings(c, owner_id)
+    c.execute(f"UPDATE business_settings SET {field}=%s WHERE user_id=%s", (value, owner_id))
+
+
+def get_biz_chat(c, cid, chat_id):
+    return c.execute(
+        """INSERT INTO business_chats (connection_id, chat_id) VALUES (%s,%s)
+           ON CONFLICT (connection_id, chat_id) DO UPDATE SET connection_id=EXCLUDED.connection_id RETURNING *""",
+        (cid, chat_id),
+    ).fetchone()
+
+
+def pause_biz_chat(c, cid, chat_id, minutes):
+    c.execute(
+        """INSERT INTO business_chats (connection_id, chat_id, paused_until)
+           VALUES (%s,%s, now() + make_interval(mins => %s))
+           ON CONFLICT (connection_id, chat_id) DO UPDATE SET paused_until=EXCLUDED.paused_until""",
+        (cid, chat_id, minutes),
+    )
+
+
+def mark_biz_disclosed(c, cid, chat_id):
+    c.execute("UPDATE business_chats SET disclosed=TRUE WHERE connection_id=%s AND chat_id=%s", (cid, chat_id))
+
+
+def add_biz_message(c, cid, chat_id, role, content):
+    c.execute(
+        "INSERT INTO business_messages (connection_id, chat_id, role, content) VALUES (%s,%s,%s,%s)",
+        (cid, chat_id, role, content[:4000]),
+    )
+    import random
+    if random.random() < 0.02:  # keep customer data only 30 days
+        c.execute("DELETE FROM business_messages WHERE created_at < now() - interval '30 days'")
+
+
+def biz_history(c, cid, chat_id, limit=12):
+    rows = c.execute(
+        """SELECT role, content FROM (SELECT id, role, content FROM business_messages
+             WHERE connection_id=%s AND chat_id=%s ORDER BY id DESC LIMIT %s) t ORDER BY id""",
+        (cid, chat_id, limit),
+    ).fetchall()
+    return [{"role": "user" if r["role"] == "user" else "assistant", "content": r["content"]} for r in rows]
+
+
+def biz_bot_replies_last_hour(c, cid, chat_id):
+    return c.execute(
+        "SELECT count(*) AS n FROM business_messages WHERE connection_id=%s AND chat_id=%s AND role='bot' "
+        "AND created_at > now() - interval '1 hour'", (cid, chat_id)).fetchone()["n"]
+
+
+def add_draft(c, cid, chat_id, owner_id, text):
+    return c.execute(
+        "INSERT INTO business_drafts (connection_id, chat_id, owner_id, text) VALUES (%s,%s,%s,%s) RETURNING id",
+        (cid, chat_id, owner_id, text)).fetchone()["id"]
+
+
+def get_draft(c, draft_id):
+    return c.execute("SELECT * FROM business_drafts WHERE id=%s", (draft_id,)).fetchone()
+
+
+def delete_draft(c, draft_id):
+    c.execute("DELETE FROM business_drafts WHERE id=%s", (draft_id,))
+
+
+# ================================================================ v4 additions
+# ---------- contact memory ----------
+def get_contact(c, cid, chat_id):
+    return c.execute(
+        """INSERT INTO business_contacts (connection_id, chat_id) VALUES (%s,%s)
+           ON CONFLICT (connection_id, chat_id) DO UPDATE SET connection_id=EXCLUDED.connection_id RETURNING *""",
+        (cid, chat_id)).fetchone()
+
+
+def bump_contact(c, cid, chat_id, name=None):
+    return c.execute(
+        "UPDATE business_contacts SET msg_count=msg_count+1, name=coalesce(name, %s) WHERE connection_id=%s AND chat_id=%s RETURNING msg_count",
+        (name, cid, chat_id)).fetchone()["msg_count"]
+
+
+def set_contact_memory(c, cid, chat_id, memory):
+    c.execute("UPDATE business_contacts SET memory=%s WHERE connection_id=%s AND chat_id=%s", (memory[:1200], cid, chat_id))
+
+
+# ---------- appointments ----------
+def add_appointment(c, owner_id, cid, chat_id, name, when_utc, note):
+    return c.execute(
+        "INSERT INTO business_appointments (owner_id, connection_id, chat_id, customer_name, when_at, note) VALUES (%s,%s,%s,%s,%s,%s) RETURNING *",
+        (owner_id, cid, chat_id, name, when_utc, note)).fetchone()
+
+
+def appointment_conflict(c, owner_id, when_utc):
+    return bool(c.execute(
+        "SELECT 1 FROM business_appointments WHERE owner_id=%s AND status='booked' AND when_at BETWEEN %s - interval '29 minutes' AND %s + interval '29 minutes'",
+        (owner_id, when_utc, when_utc)).fetchone())
+
+
+def list_appointments(c, owner_id, limit=15):
+    return c.execute("SELECT * FROM business_appointments WHERE owner_id=%s AND status='booked' AND when_at > now() - interval '1 hour' ORDER BY when_at LIMIT %s",
+                     (owner_id, limit)).fetchall()
+
+
+def get_appointment(c, aid):
+    return c.execute("SELECT * FROM business_appointments WHERE id=%s", (aid,)).fetchone()
+
+
+def cancel_appointment(c, owner_id, aid):
+    return c.execute("UPDATE business_appointments SET status='cancelled' WHERE id=%s AND owner_id=%s AND status='booked' RETURNING *",
+                     (aid, owner_id)).fetchone()
+
+
+def due_appointment_reminders(c):
+    return c.execute(
+        """UPDATE business_appointments SET reminded=TRUE WHERE id IN (
+             SELECT id FROM business_appointments WHERE status='booked' AND NOT reminded
+               AND when_at > now() AND when_at <= now() + interval '60 minutes' LIMIT 50 FOR UPDATE SKIP LOCKED) RETURNING *""").fetchall()
+
+
+# ---------- escalations / away ----------
+def add_escalation(c, team_chat_id, msg_id, cid, chat_id):
+    c.execute("INSERT INTO business_escalations (team_chat_id, msg_id, connection_id, chat_id) VALUES (%s,%s,%s,%s) ON CONFLICT DO NOTHING",
+              (team_chat_id, msg_id, cid, chat_id))
+
+
+def get_escalation(c, team_chat_id, msg_id):
+    return c.execute("SELECT * FROM business_escalations WHERE team_chat_id=%s AND msg_id=%s", (team_chat_id, msg_id)).fetchone()
+
+
+def mark_away_sent(c, cid, chat_id):
+    c.execute("UPDATE business_chats SET away_sent=now() WHERE connection_id=%s AND chat_id=%s", (cid, chat_id))
+
+
+# ---------- staff roles ----------
+def get_staff_role(c, uid):
+    r = c.execute("SELECT role FROM ai_staff WHERE user_id=%s", (uid,)).fetchone()
+    return r["role"] if r else None
+
+
+def set_staff(c, uid, role):
+    c.execute("INSERT INTO ai_staff (user_id, role) VALUES (%s,%s) ON CONFLICT (user_id) DO UPDATE SET role=EXCLUDED.role", (uid, role))
+
+
+def del_staff(c, uid):
+    return c.execute("DELETE FROM ai_staff WHERE user_id=%s", (uid,)).rowcount
+
+
+def list_staff(c):
+    return c.execute("SELECT user_id, role FROM ai_staff ORDER BY role, user_id").fetchall()
+
+
+# ---------- group moderation ----------
+def add_warn(c, chat_id, user_id):
+    return c.execute(
+        "INSERT INTO warns (chat_id, user_id, n) VALUES (%s,%s,1) ON CONFLICT (chat_id, user_id) DO UPDATE SET n=warns.n+1 RETURNING n",
+        (chat_id, user_id)).fetchone()["n"]
+
+
+def reset_warns(c, chat_id, user_id):
+    c.execute("UPDATE warns SET n=0 WHERE chat_id=%s AND user_id=%s", (chat_id, user_id))
+
+
+def get_warns(c, chat_id, user_id):
+    r = c.execute("SELECT n FROM warns WHERE chat_id=%s AND user_id=%s", (chat_id, user_id)).fetchone()
+    return r["n"] if r else 0
+
+
+# ---------- backups ----------
+def all_rows(c, table):
+    assert table in {"users", "payments", "business_appointments", "feedback", "promo_codes", "settings", "business_settings"}
+    return c.execute(f"SELECT * FROM {table} ORDER BY 1").fetchall()

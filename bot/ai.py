@@ -73,3 +73,12 @@ def generate_image(prompt):
     if r.status_code != 200 or not r.headers.get("content-type", "").startswith("image"):
         raise AIError("The image service is busy right now. Please try again in a moment.")
     return r.content
+
+
+def tts(text):
+    """Experimental text-to-speech via Groq. Returns WAV bytes or raises."""
+    r = _client.post(f"{BASE}/audio/speech", json={"model": config.TTS_MODEL, "input": text[:600],
+                                                   "voice": config.TTS_VOICE, "response_format": "wav"})
+    if r.status_code >= 400 or not r.content:
+        raise AIError(f"voice error {r.status_code}")
+    return r.content

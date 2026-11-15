@@ -63,3 +63,9 @@ def verify_signature(raw: bytes, ts: str, sig: str, secret: str) -> bool:
         return abs(time.time() - int(ts)) < 300 and hmac.compare_digest(mac, sig)
     except Exception:
         return False
+
+
+def ping(c):
+    """Cheap call to check that the saved API key works."""
+    _request(c, "GET", "/api/v1/payments?limit=1")
+    return True

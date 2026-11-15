@@ -149,4 +149,104 @@ CREATE TABLE IF NOT EXISTS ratings (
   rating     SMALLINT NOT NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+CREATE TABLE IF NOT EXISTS business_connections (
+  id           TEXT PRIMARY KEY,
+  user_id      BIGINT NOT NULL,
+  user_chat_id BIGINT NOT NULL,
+  can_reply    BOOLEAN NOT NULL DEFAULT TRUE,
+  is_enabled   BOOLEAN NOT NULL DEFAULT TRUE,
+  created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_bizconn_user ON business_connections(user_id);
+
+CREATE TABLE IF NOT EXISTS business_settings (
+  user_id      BIGINT PRIMARY KEY,
+  mode         TEXT NOT NULL DEFAULT 'draft',
+  instructions TEXT,
+  disclose     BOOLEAN NOT NULL DEFAULT TRUE
+);
+
+CREATE TABLE IF NOT EXISTS business_chats (
+  connection_id TEXT NOT NULL,
+  chat_id       BIGINT NOT NULL,
+  paused_until  TIMESTAMPTZ,
+  disclosed     BOOLEAN NOT NULL DEFAULT FALSE,
+  PRIMARY KEY (connection_id, chat_id)
+);
+
+CREATE TABLE IF NOT EXISTS business_messages (
+  id            BIGSERIAL PRIMARY KEY,
+  connection_id TEXT NOT NULL,
+  chat_id       BIGINT NOT NULL,
+  role          TEXT NOT NULL,
+  content       TEXT NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_bizmsg_chat ON business_messages(connection_id, chat_id, id);
+
+CREATE TABLE IF NOT EXISTS business_drafts (
+  id            BIGSERIAL PRIMARY KEY,
+  connection_id TEXT NOT NULL,
+  chat_id       BIGINT NOT NULL,
+  owner_id      BIGINT NOT NULL,
+  text          TEXT NOT NULL,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE business_settings ADD COLUMN IF NOT EXISTS hours_start SMALLINT;
+ALTER TABLE business_settings ADD COLUMN IF NOT EXISTS hours_end SMALLINT;
+ALTER TABLE business_settings ADD COLUMN IF NOT EXISTS away_message TEXT;
+ALTER TABLE business_settings ADD COLUMN IF NOT EXISTS faq TEXT;
+ALTER TABLE business_settings ADD COLUMN IF NOT EXISTS booking BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE business_settings ADD COLUMN IF NOT EXISTS voice BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE business_settings ADD COLUMN IF NOT EXISTS team_chat_id BIGINT;
+ALTER TABLE business_chats ADD COLUMN IF NOT EXISTS away_sent TIMESTAMPTZ;
+ALTER TABLE users ADD COLUMN IF NOT EXISTS voice_reply BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE chats ADD COLUMN IF NOT EXISTS antilink BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE chats ADD COLUMN IF NOT EXISTS badwords TEXT NOT NULL DEFAULT '';
+ALTER TABLE chats ADD COLUMN IF NOT EXISTS warn_limit INT NOT NULL DEFAULT 3;
+
+CREATE TABLE IF NOT EXISTS business_contacts (
+  connection_id TEXT NOT NULL,
+  chat_id       BIGINT NOT NULL,
+  name          TEXT,
+  memory        TEXT NOT NULL DEFAULT '',
+  msg_count     INT NOT NULL DEFAULT 0,
+  PRIMARY KEY (connection_id, chat_id)
+);
+
+CREATE TABLE IF NOT EXISTS business_appointments (
+  id            BIGSERIAL PRIMARY KEY,
+  owner_id      BIGINT NOT NULL,
+  connection_id TEXT NOT NULL,
+  chat_id       BIGINT NOT NULL,
+  customer_name TEXT,
+  when_at       TIMESTAMPTZ NOT NULL,
+  note          TEXT,
+  status        TEXT NOT NULL DEFAULT 'booked',
+  reminded      BOOLEAN NOT NULL DEFAULT FALSE,
+  created_at    TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_appt_owner ON business_appointments(owner_id, when_at);
+
+CREATE TABLE IF NOT EXISTS business_escalations (
+  team_chat_id  BIGINT NOT NULL,
+  msg_id        BIGINT NOT NULL,
+  connection_id TEXT NOT NULL,
+  chat_id       BIGINT NOT NULL,
+  PRIMARY KEY (team_chat_id, msg_id)
+);
+
+CREATE TABLE IF NOT EXISTS ai_staff (
+  user_id BIGINT PRIMARY KEY,
+  role    TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS warns (
+  chat_id BIGINT NOT NULL,
+  user_id BIGINT NOT NULL,
+  n       INT NOT NULL DEFAULT 0,
+  PRIMARY KEY (chat_id, user_id)
+);
 """
