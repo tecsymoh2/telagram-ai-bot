@@ -9,7 +9,7 @@ import random
 import secrets
 import string
 
-from . import ai, alerts, colors, config, db, files, images, roles, security, styledata, techland, utils, web
+from . import ai, alerts, colors, config, db, files, images, menu, menudata, roles, security, styledata, techland, utils, web
 from . import telegram as tg
 
 START_TIME = time.time()
@@ -28,6 +28,8 @@ ADMIN_LEVEL = {   # 1 support, 2 manager, 3 owner
 }
 
 HELP = """🤖 Commands
+
+📋 /menu – every feature as buttons (colours set by the admin)
 
 💬 Chat
 /reset · /regenerate · /history · /summary · /export
@@ -235,6 +237,8 @@ def handle_update(c, update):
     if user["is_banned"]:
         return
     admin = is_admin_id(user["id"])
+    if not is_group and text.strip() in menu.BOTTOM_TEXT:
+        text = menu.BOTTOM_TEXT[text.strip()]
 
     if msg.get("document") and text.lower().startswith("/bizfaq") and chat["type"] == "private":
         doc = msg["document"]
@@ -259,6 +263,11 @@ def handle_update(c, update):
     pending = user.get("pending_action") or ""
     if pending.startswith("buy:") and text and not is_group:
         return start_checkout(c, user, chat_id, msg["message_id"], pending[4:], text)
+    if pending.startswith("cmd:") and text and not is_group:          # the user tapped a menu button that needs text
+        e = menudata.ENTRY.get(pending[4:])
+        db.set_user_field(c, user["id"], "pending_action", None)
+        if e:
+            return run_command(c, user, chat_id, msg, e["cmd"], (e["arg"] + text).strip(), admin)
 
     if msg.get("document"):
         return handle_document(c, user, chat_id, msg, text, group_persona)
@@ -551,9 +560,19 @@ def run_command(c, user, chat_id, msg, cmd, arg, admin):
         if arg.startswith("ref_") and arg[4:].isdigit() and user.get("is_new") and private:
             apply_referral(c, user, int(arg[4:]))
         custom = db.get_setting(c, "start_text")
-        if custom:
-            return reply(custom.replace("{name}", user.get("first_name") or "there"))
-        return reply(f"👋 Hi {user.get('first_name') or 'there'}! I'm your AI assistant. Send a message, voice note, photo, or document.\n\nType /help to see what I can do.")
+        welcome = (custom.replace("{name}", user.get("first_name") or "there") if custom else
+                   f"👋 Hi {user.get('first_name') or 'there'}! I'm your AI assistant. Just type, send a voice note, a photo or a file - or tap a button below.")
+        if private:
+            tg.send(chat_id, welcome, mid, reply_markup=menu.reply_keyboard())
+            return tg.send(chat_id, *menu.main_view(roles.level_of(c, uid))[:1], keyboard=menu.main_view(roles.level_of(c, uid))[1])
+        return reply(welcome)
+    if cmd == "/menu":
+        if not private:
+            return reply("Open the button menu in a private chat with me.")
+        lvl = roles.level_of(c, uid)
+        sec = arg.strip().lower()
+        text, kb = menu.section_view(sec, lvl) if sec in menudata.SECTION and (sec != "adm" or lvl >= 1) else menu.main_view(lvl)
+        return tg.send(chat_id, text, keyboard=kb)
     if cmd == "/help":
         return reply(HELP + (("\n\n" + ADMIN_HELP) if roles.level_of(c, uid) >= 1 else ""))
     if cmd == "/about":
@@ -996,10 +1015,10 @@ def run_admin(c, chat_id, msg, reply, cmd, arg):
     if cmd == "/setcolor":
         key, _, name = arg.partition(" ")
         style = styledata.ALIASES.get(name.strip().lower())
-        if key not in styledata.DEFAULTS or not style:
-            return reply("Usage: /setcolor <key> <blue|green|red|default>\nKeys: " + ", ".join(styledata.DEFAULTS) + "\nTip: /colors lets you pick with buttons.")
+        if not styledata.valid_key(key) or not style or (style == "inherit" and not key.startswith("b_")):
+            return reply("Usage: /setcolor <key> <blue|green|red|default>\nExamples: /setcolor cat_tools green (a whole section) · /setcolor b_srch red (one button) · /setcolor b_srch inherit\nTip: /colors lets you pick with buttons.")
         colors.set_color(c, key, style)
-        return reply(f"🎨 {styledata.LABELS[key]} is now {styledata.STYLES[style]}.")
+        return reply(f"🎨 {styledata.LABELS[key]} is now " + ("the same as its section." if style == "inherit" else styledata.STYLES[style] + "."))
     if cmd == "/resetcolors":
         colors.reset(c)
         return reply("🎨 All button colours are back to the defaults.")
@@ -1286,7 +1305,7 @@ def handle_callback(c, cq):
     kind, _, value = data.partition(":")
     msg = cq.get("message")
     chat_id = msg["chat"]["id"] if msg else user["id"]
-    if kind in ("colh", "col", "colset", "colreset"):
+    if kind in ("colh", "colg", "col", "colset", "colreset"):
         if roles.level_of(c, user["id"]) < 2:
             return tg.answer_callback(cq["id"], "Managers only", True)
 
@@ -1301,13 +1320,17 @@ def handle_callback(c, cq):
             return show(*colors.home_view(c))
         if kind == "colh":
             return show(*colors.home_view(c))
-        if kind == "col" and value in styledata.DEFAULTS:
+        if kind == "colg" and value.isdigit() and int(value) < len(styledata.GROUPS):
+            return show(*colors.group_view(c, int(value)))
+        if kind == "col" and styledata.valid_key(value):
             return show(*colors.picker_view(c, value))
         if kind == "colset":
             key, _, style = value.partition(":")
-            if key in styledata.DEFAULTS and style in styledata.STYLES:
+            if styledata.valid_key(key) and (style in styledata.STYLES or (style == "inherit" and key.startswith("b_"))):
                 colors.set_color(c, key, style)
                 return show(*colors.picker_view(c, key))
+        return
+    if menu.on_callback(c, cq, user, roles.level_of(c, user["id"])):
         return
     from . import business
     if business.handle_callback(c, cq, user):

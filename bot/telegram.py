@@ -17,11 +17,8 @@ def auto_style(btn):
     """Colour an inline button from the admin's choices (an explicit style on the button wins)."""
     if "style" in btn:
         return btn
-    key = styledata.key_of(btn.get("callback_data", ""))
-    if key:
-        style = STYLE_MAP.get(key, styledata.DEFAULTS.get(key, "default"))
-        return btn if style == "default" else {**btn, "style": style}
-    return btn
+    style = styledata.resolve(btn.get("callback_data", ""), STYLE_MAP)
+    return {**btn, "style": style} if style else btn
 
 
 def style_keyboard(rows):
@@ -66,7 +63,7 @@ def chunks(text, size=4000):
     yield text
 
 
-def send(chat_id, text, reply_to=None, keyboard=None):
+def send(chat_id, text, reply_to=None, keyboard=None, reply_markup=None):
     parts = list(chunks(text))
     for i, part in enumerate(parts):
         params = {"chat_id": chat_id, "text": part}
@@ -74,6 +71,8 @@ def send(chat_id, text, reply_to=None, keyboard=None):
             params["reply_parameters"] = {"message_id": reply_to, "allow_sending_without_reply": True}
         if keyboard and i == len(parts) - 1:
             params["reply_markup"] = {"inline_keyboard": style_keyboard(keyboard)}
+        elif reply_markup and i == len(parts) - 1:
+            params["reply_markup"] = reply_markup
         call("sendMessage", **params)
 
 
