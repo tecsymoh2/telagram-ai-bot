@@ -29,7 +29,7 @@ COMMANDS = [
     ("referrals", "Friends you invited"), ("groupinfo", "Group settings"),
     ("read", "Summarize a web page"), ("weather", "Weather forecast"), ("convert", "Convert currency"),
     ("qr", "Make a QR code"), ("password", "Generate a password"), ("dice", "Roll dice"), ("coin", "Flip a coin"),
-    ("business", "Auto-reply in your chats"), ("sticker", "Photo → sticker"), ("enhance", "Enhance a photo"),
+    ("menu", "Open the button menu"), ("business", "Auto-reply in your chats"), ("sticker", "Photo → sticker"), ("enhance", "Enhance a photo"),
     ("removebg", "Remove photo background"), ("voicereply", "Voice answers on/off"), ("leaderboard", "Top streaks & inviters"), ("deleteme", "Erase my data"),
     ("feedback", "Send feedback"), ("status", "Bot health"), ("about", "About"),
 ]
