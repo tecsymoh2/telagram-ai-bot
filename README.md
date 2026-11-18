@@ -55,6 +55,12 @@ Draft mode (default) shows you a suggested reply with Send/Skip buttons. When yo
 - **Staff roles:** `/addstaff <id> <manager|support>`; **backups:** `/backup`, `/setbackup`; **alerts:** errors and failed health checks are sent to owners.
 The cron job (`/cronurl`) now also sends appointment reminders, backups and health checks.
 
+## Button menu & colours
+- `/menu` (or the bottom keyboard) opens every feature as buttons: Chat, Tools, Create, Organise, Settings, Premium, Rewards, Business, Groups, Help, Admin.
+  Buttons that need text ask for it first; staff-only buttons appear by role.
+- `/colors` (managers/owner): recolour the main menu, a whole section at once (`cat_…`), or any single button (`b_…`), the bottom keyboard, answer buttons and more.
+  Shortcuts: `/setcolor cat_tools green`, `/setcolor b_srch red`, `/setcolor b_srch inherit`, `/resetcolors`.
+
 ## Local
 ```
 python -m venv .venv && source .venv/bin/activate
